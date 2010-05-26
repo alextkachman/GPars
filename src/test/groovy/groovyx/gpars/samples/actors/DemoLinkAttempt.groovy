@@ -60,10 +60,10 @@ abstract class AbstractExitActor extends AbstractPooledActor {
     }
 }
 
-class ActorWhichWillDie extends AbstractExitActor {
+class ActorWhichWillStop extends AbstractExitActor {
     @Override
     protected void act() {
-        throw new Exception("I died a little")
+        throw new Exception("I need to stop")
     }
 }
 
@@ -86,17 +86,16 @@ class ActorWhichIsSystem extends AbstractExitActor {
     }
 }
 
-def actdie1 = new ActorWhichWillDie()
-def actdie2 = new ActorWhichWillDie()
-def actdie3 = new ActorWhichWillDie()
-def sysact = new ActorWhichIsSystem()
-sysact.start()
-actdie1.addLink(sysact)
-actdie2.addLink(sysact)
-actdie3.addLink(sysact)
-actdie1.start()
-actdie2.start()
-actdie3.start()
+def act1 = new ActorWhichWillStop()
+def act2 = new ActorWhichWillStop()
+def act3 = new ActorWhichWillStop()
+def systemActor = new ActorWhichIsSystem()
+systemActor.start()
+act1.addLink(systemActor)
+act2.addLink(systemActor)
+act3.addLink(systemActor)
+act1.start()
+act2.start()
+act3.start()
 
-//sysact.stop()
-sysact.join()
+systemActor.join()
