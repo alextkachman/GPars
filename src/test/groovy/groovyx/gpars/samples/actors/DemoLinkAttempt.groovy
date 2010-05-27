@@ -18,6 +18,7 @@ package groovyx.gpars.samples.actors
 
 import groovyx.gpars.actor.AbstractPooledActor
 
+//todo update once linking actors is supported
 class ExitSignal {
     String reason
 }
