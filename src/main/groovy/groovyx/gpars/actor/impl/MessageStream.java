@@ -39,14 +39,14 @@ public abstract class MessageStream extends WithSerialId {
      * Send message to stream and return immediately
      *
      * @param message message to send
-     * @return always return message stream itself
+     * @return always returns message streamitself
      */
     public abstract MessageStream send(Object message);
 
     /**
      * Convenience method for send(new Object()).
      *
-     * @return always return message stream itself
+     * @return always returns message streamitself
      */
     public MessageStream send() {
         return send(new Object());
@@ -60,7 +60,7 @@ public abstract class MessageStream extends WithSerialId {
      * @param message message to send
      * @param replyTo where to send reply
      * @param <T>     type of message accepted by the stream
-     * @return always return message stream itself
+     * @return always returns message streamitself
      */
     public final <T> MessageStream send(final T message, final MessageStream replyTo) {
         return send(new ActorMessage(message, replyTo));
@@ -105,7 +105,7 @@ public abstract class MessageStream extends WithSerialId {
      *
      * @param message message to send
      * @param closure closure to execute when reply became available
-     * @return The message that came in reply to the original send.
+     * @return Always returns message streamitself
      * @throws InterruptedException if interrupted while waiting
      */
     @SuppressWarnings({"AssignmentToMethodParameter"})

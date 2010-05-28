@@ -203,4 +203,6 @@ public abstract class AgentCore implements Runnable {
             errors = null;
         }
     }
+
+    //todo hasErrors
 }
