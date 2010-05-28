@@ -204,5 +204,9 @@ public abstract class AgentCore implements Runnable {
         }
     }
 
-    //todo hasErrors
+    @SuppressWarnings({"SynchronizedMethod"})
+    public synchronized boolean hasErrors() {
+        if (errors == null) return false;
+        return !errors.isEmpty();
+    }
 }
