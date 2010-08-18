@@ -142,6 +142,20 @@
       <option name="myLocal" value="true" />
     </copyright>
     <module2copyright />
+    <LanguageOptions name="Properties">
+      <option name="fileTypeOverride" value="1" />
+      <option name="relativeBefore" value="true" />
+      <option name="addBlankAfter" value="true" />
+      <option name="fileLocation" value="1" />
+      <option name="block" value="true" />
+      <option name="separateBefore" value="false" />
+      <option name="separateAfter" value="false" />
+      <option name="prefixLines" value="true" />
+      <option name="lenBefore" value="80" />
+      <option name="lenAfter" value="80" />
+      <option name="box" value="false" />
+      <option name="filler" value=" " />
+    </LanguageOptions>
     <LanguageOptions name="__TEMPLATE__">
       <option name="fileTypeOverride" value="2" />
       <option name="relativeBefore" value="true" />
@@ -1443,7 +1457,7 @@
         <inspection_tool class="ObjectNotify" enabled="true" level="WARNING" enabled_by_default="true" />
         <inspection_tool class="ObjectToString" enabled="true" level="WARNING" enabled_by_default="true" />
         <inspection_tool class="ObsoleteCollection" enabled="true" level="WARNING" enabled_by_default="true">
-          <option name="ignoreLibraryArguments" value="false" />
+          <option name="ignoreRequiredObsoleteCollectionTypes" value="false" />
         </inspection_tool>
         <inspection_tool class="OctalAndDecimalIntegersMixed" enabled="true" level="WARNING" enabled_by_default="true" />
         <inspection_tool class="OnDemandImport" enabled="true" level="WARNING" enabled_by_default="true" />
@@ -2506,7 +2520,7 @@
         <inspection_tool class="ObjectNotify" enabled="true" level="WARNING" enabled_by_default="true" />
         <inspection_tool class="ObjectToString" enabled="true" level="WARNING" enabled_by_default="true" />
         <inspection_tool class="ObsoleteCollection" enabled="true" level="WARNING" enabled_by_default="true">
-          <option name="ignoreLibraryArguments" value="false" />
+          <option name="ignoreRequiredObsoleteCollectionTypes" value="false" />
         </inspection_tool>
         <inspection_tool class="OctalAndDecimalIntegersMixed" enabled="true" level="WARNING" enabled_by_default="true" />
         <inspection_tool class="OctalIntegerJS" enabled="true" level="WARNING" enabled_by_default="true" />
@@ -3504,7 +3518,7 @@
         <inspection_tool class="ObjectNotify" enabled="true" level="WARNING" enabled_by_default="true" />
         <inspection_tool class="ObjectToString" enabled="true" level="WARNING" enabled_by_default="true" />
         <inspection_tool class="ObsoleteCollection" enabled="true" level="WARNING" enabled_by_default="true">
-          <option name="ignoreLibraryArguments" value="false" />
+          <option name="ignoreRequiredObsoleteCollectionTypes" value="false" />
         </inspection_tool>
         <inspection_tool class="OctalAndDecimalIntegersMixed" enabled="true" level="WARNING" enabled_by_default="true" />
         <inspection_tool class="OnDemandImport" enabled="true" level="WARNING" enabled_by_default="true" />
@@ -4571,11 +4585,15 @@
         <w>kerridge</w>
         <w>matemàtica</w>
         <w>matemàtiques</w>
+        <w>memoize</w>
+        <w>memoized</w>
         <w>negator</w>
+        <w>other's</w>
         <w>pilsner</w>
         <w>protobuf</w>
         <w>regex</w>
         <w>restarter</w>
+        <w>spockframework</w>
         <w>spooler</w>
         <w>spoolers</w>
         <w>sqrt</w>

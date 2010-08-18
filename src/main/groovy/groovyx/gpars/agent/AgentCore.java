@@ -183,7 +183,7 @@ public abstract class AgentCore implements Runnable {
      * @param e The exception to store
      */
     @SuppressWarnings({"MethodOnlyUsedFromInnerClass", "SynchronizedMethod"})
-    private synchronized void registerError(final Exception e) {
+    synchronized void registerError(final Exception e) {
         if (errors == null) errors = new ArrayList<Exception>();
         errors.add(e);
     }
@@ -204,6 +204,11 @@ public abstract class AgentCore implements Runnable {
         }
     }
 
+    /**
+     * Indicates whether there have been exception thrown within the agent's body.
+     *
+     * @return True, if any exceptions have occurred in the agent's body
+     */
     @SuppressWarnings({"SynchronizedMethod"})
     public synchronized boolean hasErrors() {
         if (errors == null) return false;

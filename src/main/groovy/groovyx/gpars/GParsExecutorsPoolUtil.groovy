@@ -16,6 +16,7 @@
 
 package groovyx.gpars
 
+import groovy.time.Duration
 import java.util.concurrent.Callable
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -35,6 +36,12 @@ import java.util.concurrent.atomic.AtomicReference
  * Date: Oct 23, 2008
  */
 public class GParsExecutorsPoolUtil {
+
+    /**
+     * Allows timeouts for async operations
+     */
+    private static final Timer timer = new Timer('GParsExecutorsTimeoutTimer', true)
+
     /**
      * schedules the supplied closure for processing in the underlying thread pool.
      */
@@ -45,10 +52,34 @@ public class GParsExecutorsPoolUtil {
     }
 
     /**
-     * Calls a closure in a separate thread supplying the given arguments, returning a future for the potential return value,
+     * Calls a closure in a separate thread supplying the given arguments, returning a future for the potential return value.
      */
     public static Future callAsync(final Closure cl, final Object... args) {
         callParallel {-> cl(* args)}
+    }
+
+    /**
+     * Calls a closure in a separate thread supplying the given arguments, returning a future for the potential return value.
+     * Also allows the asynchronous calculation to be cancelled after a given timeout.
+     * In order to allow cancellation, the asynchronously running code must keep checking the _interrupted_ flag of its
+     * own thread and cease the calculation once the flag is set to true.
+     * @param timeout The timeout in milliseconds to wait before the calculation gets cancelled.
+     */
+    public static Future callTimeoutAsync(final Closure cl, long timeout, final Object... args) {
+        final Future f = callAsync(cl, args)
+        timer.schedule({f.cancel(true)} as TimerTask, timeout)
+        return f
+    }
+
+    /**
+     * Calls a closure in a separate thread supplying the given arguments, returning a future for the potential return value.
+     * Also allows the asynchronous calculation to be cancelled after a given timeout.
+     * In order to allow cancellation, the asynchronously running code must keep checking the _interrupted_ flag of its
+     * own thread and cease the calculation once the flag is set to true.
+     * @param timeout The timeout to wait before the calculation gets cancelled.
+     */
+    public static Future callTimeoutAsync(final Closure cl, Duration timeout, final Object... args) {
+        callTimeoutAsync(cl, timeout.toMilliseconds(), args)
     }
 
     /**
