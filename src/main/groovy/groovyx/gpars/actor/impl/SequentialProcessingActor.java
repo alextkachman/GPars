@@ -18,6 +18,7 @@ package groovyx.gpars.actor.impl;
 
 import groovy.lang.Closure;
 import groovy.lang.GroovyRuntimeException;
+import groovy.time.BaseDuration;
 import groovy.time.Duration;
 import groovyx.gpars.actor.Actor;
 import groovyx.gpars.actor.ActorMessage;
@@ -33,6 +34,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
@@ -51,14 +53,11 @@ import static groovyx.gpars.actor.impl.ActorException.TIMEOUT;
 public abstract class SequentialProcessingActor extends Actor implements Runnable {
 
     /**
-     * The actor group to which the actor belongs
-     */
-    protected volatile PGroup actorGroup;
-
-    /**
      * Code for the loop, if any
      */
     protected Runnable loopCode;
+    protected Closure afterLoopCode;
+    protected Callable<Boolean> loopCondition;
 
     /**
      * Code for the next action
@@ -88,12 +87,9 @@ public abstract class SequentialProcessingActor extends Actor implements Runnabl
     private static final AtomicIntegerFieldUpdater<SequentialProcessingActor> countUpdater = AtomicIntegerFieldUpdater.newUpdater(SequentialProcessingActor.class, "count");
 
     private volatile Thread waitingThread;
-    private volatile Thread currentThread;
 
     private static final ActorMessage startMessage = new ActorMessage("startMessage", null);
-    private static final ActorMessage stopMessage = new ActorMessage("stopMessage", null);
     private static final ActorMessage loopMessage = new ActorMessage("loopMessage", null);
-    private static final ActorMessage terminateMessage = new ActorMessage("terminateMessage", null);
 
     protected static final int S_ACTIVE_MASK = 1;
     protected static final int S_FINISHING_MASK = 2;
@@ -120,14 +116,8 @@ public abstract class SequentialProcessingActor extends Actor implements Runnabl
      * Timer holding timeouts for react methods
      */
     private static final Timer timer = new Timer(true);
-
-    /**
-     * Checks whether the current thread is the actor's current thread.
-     */
-    @Override
-    public final boolean isActorThread() {
-        return Thread.currentThread() == currentThread;
-    }
+    private static final String SHOULD_NOT_REACH_HERE = "Should not reach here";
+    private static final String ERROR_EVALUATING_LOOP_CONDITION = "Error evaluating loop condition";
 
     /**
      * Checks the current status of the Actor.
@@ -281,7 +271,7 @@ public abstract class SequentialProcessingActor extends Actor implements Runnabl
      * Creates a new instance, sets the default actor group.
      */
     protected SequentialProcessingActor() {
-        setActorGroup(Actors.defaultActorPGroup);
+        setParallelGroup(Actors.defaultActorPGroup);
     }
 
     /**
@@ -290,43 +280,19 @@ public abstract class SequentialProcessingActor extends Actor implements Runnabl
      *
      * @param group new group
      */
-    public final void setActorGroup(final PGroup group) {
-        if (group == null) {
-            throw new IllegalArgumentException("Cannot set actor's group to null.");
-        }
-
+    @Override
+    public final void setParallelGroup(final PGroup group) {
         if (stopFlag != S_NOT_STARTED) {
             throw new IllegalStateException("Cannot reset actor's group after it was started.");
         }
-
-        actorGroup = group;
-    }
-
-    /**
-     * Retrieves the group to which the actor belongs
-     *
-     * @return The actor's group
-     */
-    public PGroup getActorGroup() {
-        return actorGroup;
+        super.setParallelGroup(group);
+        parallelGroup = group;
     }
 
     @Override
     public final MessageStream send(final Object message) {
-        if (stopFlag != S_RUNNING) {
-            //noinspection ObjectEquality
-            if (message != terminateMessage && message != stopMessage)
-                throw new IllegalStateException("The actor cannot accept messages at this point.");
-        }
 
-        final ActorMessage actorMessage;
-        if (message instanceof ActorMessage) {
-            actorMessage = (ActorMessage) message;
-        } else {
-            actorMessage = ActorMessage.build(message);
-        }
-
-        final Node toAdd = new Node(actorMessage);
+        final Node toAdd = new Node(createActorMessage(message));
 
         while (true) {
             final Node prev = inputQueue;
@@ -350,11 +316,16 @@ public abstract class SequentialProcessingActor extends Actor implements Runnabl
         return this;
     }
 
+    @Override
+    protected final boolean hasBeenStopped() {
+        return stopFlag != S_RUNNING;
+    }
+
     /**
      * Schedules the current actor for processing on the actor group's thread pool.
      */
     private void schedule() {
-        actorGroup.getThreadPool().execute(this);
+        parallelGroup.getThreadPool().execute(this);
     }
 
     protected void scheduleLoop() {
@@ -378,25 +349,8 @@ public abstract class SequentialProcessingActor extends Actor implements Runnabl
         throw CONTINUE;
     }
 
-    private void handleStart() {
-        doOnStart();
-    }
-
-    /**
-     * Allows subclasses to add behavior to run after actor's start
-     */
-    protected abstract void doOnStart();
-
-    private void handleTimeout() {
-        doOnTimeout();
-    }
-
-    /**
-     * Allows subclasses to add behavior to run after actor's timeout
-     */
-    protected abstract void doOnTimeout();
-
-    private void handleTermination() {
+    @Override
+    protected void handleTermination() {
         if (stopFlag == S_STOPPING)
             stopFlag = S_STOPPED;
         else if (stopFlag == S_TERMINATING)
@@ -406,39 +360,10 @@ public abstract class SequentialProcessingActor extends Actor implements Runnabl
             throw new IllegalStateException("Messed up actors state detected when terminating: " + stopFlag);
 
         try {
-            doOnTermination();
+            super.handleTermination();
         } finally {
             getJoinLatch().bind(null);
         }
-    }
-
-    /**
-     * Allows subclasses to add behavior to run after actor's termination
-     */
-    protected abstract void doOnTermination();
-
-    private void handleException(final Throwable exception) {
-        doOnException(exception);
-    }
-
-    /**
-     * Allows subclasses to add behavior to run after exception in actor's body
-     *
-     * @param exception The exception that was fired
-     */
-    protected abstract void doOnException(final Throwable exception);
-
-    private void handleInterrupt(final InterruptedException exception) {
-        Thread.interrupted();
-        doOnInterrupt(exception);
-    }
-
-    /**
-     * Allows subclasses to add behavior to run after actor's interruption
-     *
-     * @param exception The InterruptedException
-     */
-    protected void doOnInterrupt(final InterruptedException exception) {
     }
 
     /**
@@ -449,7 +374,7 @@ public abstract class SequentialProcessingActor extends Actor implements Runnabl
     @Override
     public final SequentialProcessingActor start() {
         if (!stopFlagUpdater.compareAndSet(this, S_NOT_STARTED, S_RUNNING)) {
-            throw new IllegalStateException("Actor has already been started.");
+            throw new IllegalStateException(ACTOR_HAS_ALREADY_BEEN_STARTED);
         }
 
         send(startMessage);
@@ -591,6 +516,78 @@ public abstract class SequentialProcessingActor extends Actor implements Runnabl
     }
 
     /**
+     * Retrieves a message from the message queue, waiting, if necessary, for a message to arrive.
+     *
+     * @return The message retrieved from the queue, or null, if the timeout expires.
+     * @throws InterruptedException If the thread is interrupted during the wait. Should propagate up to stop the thread.
+     */
+    protected abstract Object receiveImpl() throws InterruptedException;
+
+    /**
+     * Retrieves a message from the message queue, waiting, if necessary, for a message to arrive.
+     *
+     * @param timeout how long to wait before giving up, in units of unit
+     * @param units   a TimeUnit determining how to interpret the timeout parameter
+     * @return The message retrieved from the queue, or null, if the timeout expires.
+     * @throws InterruptedException If the thread is interrupted during the wait. Should propagate up to stop the thread.
+     */
+    protected abstract Object receiveImpl(final long timeout, final TimeUnit units) throws InterruptedException;
+
+    /**
+     * Retrieves a message from the message queue, waiting, if necessary, for a message to arrive.
+     *
+     * @return The message retrieved from the queue, or null, if the timeout expires.
+     * @throws InterruptedException If the thread is interrupted during the wait. Should propagate up to stop the thread.
+     */
+    protected final Object receive() throws InterruptedException {
+        final Object msg = receiveImpl();
+        return SequentialProcessingActor.unwrapMessage(msg);
+    }
+
+    /**
+     * Retrieves a message from the message queue, waiting, if necessary, for a message to arrive.
+     *
+     * @param timeout how long to wait before giving up, in units of unit
+     * @param units   a TimeUnit determining how to interpret the timeout parameter
+     * @return The message retrieved from the queue, or null, if the timeout expires.
+     * @throws InterruptedException If the thread is interrupted during the wait. Should propagate up to stop the thread.
+     */
+    protected final Object receive(final long timeout, final TimeUnit units) throws InterruptedException {
+        final Object msg = receiveImpl(timeout, units);
+        return SequentialProcessingActor.unwrapMessage(msg);
+    }
+
+    private static Object unwrapMessage(final Object msg) {
+        //more a double-check here, since all current implementations of the receiveImpl() method do unwrap already
+        if (msg instanceof ActorMessage) {
+            return ((ActorMessage) msg).getPayLoad();
+        } else {
+            return msg;
+        }
+    }
+
+    /**
+     * Retrieves a message from the message queue, waiting, if necessary, for a message to arrive.
+     *
+     * @param duration how long to wait before giving up, in units of unit
+     * @return The message retrieved from the queue, or null, if the timeout expires.
+     * @throws InterruptedException If the thread is interrupted during the wait. Should propagate up to stop the thread.
+     */
+    protected final Object receive(final BaseDuration duration) throws InterruptedException {
+        return receive(duration.toMilliseconds(), TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Removes the head of the message queue
+     *
+     * @return The head message, or null, if the message queue is empty
+     */
+    @Override
+    protected final ActorMessage sweepNextMessage() {
+        return pollMessage();
+    }
+
+    /**
      * Enables multiple argument closures to be passed to react().
      * The MultiMessageReaction class takes just one argument and will wrap the intended closure.
      * After invoking the MultiMessageReaction will curry the obtained value onto the wrapped multi-argument closure.
@@ -677,7 +674,7 @@ public abstract class SequentialProcessingActor extends Actor implements Runnabl
 
                 if (toProcess == loopMessage) {
                     loopCode.run();
-                    throw new IllegalStateException("Should not reach here");
+                    throw new IllegalStateException(SHOULD_NOT_REACH_HERE);
                 }
 
                 if (reaction != null) {
@@ -754,7 +751,91 @@ public abstract class SequentialProcessingActor extends Actor implements Runnabl
      * @param code The closure to invoke repeatedly
      */
     protected final void loop(final Runnable code) {
-        if (loopCode != null) {
+        loop((Callable<Boolean>) null, null, code);
+    }
+
+    /**
+     * Ensures that the supplied closure will be invoked repeatedly in a loop.
+     * The method never returns, but instead frees the processing thread back to the thread pool.
+     *
+     * @param numberOfLoops The loop will only be run the given number of times
+     * @param code          The closure to invoke repeatedly
+     */
+    protected final void loop(final int numberOfLoops, final Runnable code) {
+        loop(new Callable<Boolean>() {
+            private int counter = 0;
+
+            public Boolean call() {
+                counter++;
+                //noinspection UnnecessaryBoxing
+                return Boolean.valueOf(counter <= numberOfLoops);
+            }
+        }, null, code);
+    }
+
+    /**
+     * Ensures that the supplied closure will be invoked repeatedly in a loop.
+     * The method never returns, but instead frees the processing thread back to the thread pool.
+     *
+     * @param numberOfLoops The loop will only be run the given number of times
+     * @param afterLoopCode Code to run after the main actor's loop finishes
+     * @param code          The closure to invoke repeatedly
+     */
+    protected final void loop(final int numberOfLoops, final Closure afterLoopCode, final Runnable code) {
+        loop(new Callable<Boolean>() {
+            private int counter = 0;
+
+            public Boolean call() {
+                counter++;
+                //noinspection UnnecessaryBoxing
+                return Boolean.valueOf(counter <= numberOfLoops);
+            }
+        }, afterLoopCode, code);
+    }
+
+    /**
+     * Ensures that the supplied closure will be invoked repeatedly in a loop.
+     * The method never returns, but instead frees the processing thread back to the thread pool.
+     *
+     * @param condition A condition to evaluate before each iteration starts. If the condition returns false, the loop exits.
+     * @param code      The closure to invoke repeatedly
+     */
+    protected final void loop(final Closure condition, final Runnable code) {
+        loop(new Callable<Boolean>() {
+            public Boolean call() {
+                return (Boolean) condition.call();
+            }
+        }, null, code);
+
+    }
+
+    /**
+     * Ensures that the supplied closure will be invoked repeatedly in a loop.
+     * The method never returns, but instead frees the processing thread back to the thread pool.
+     *
+     * @param condition     A condition to evaluate before each iteration starts. If the condition returns false, the loop exits.
+     * @param afterLoopCode Code to run after the main actor's loop finishes
+     * @param code          The closure to invoke repeatedly
+     */
+    protected final void loop(final Closure condition, final Closure afterLoopCode, final Runnable code) {
+        loop(new Callable<Boolean>() {
+            public Boolean call() {
+                return (Boolean) condition.call();
+            }
+        }, afterLoopCode, code);
+
+    }
+
+    /**
+     * Ensures that the supplied closure will be invoked repeatedly in a loop.
+     * The method never returns, but instead frees the processing thread back to the thread pool.
+     *
+     * @param condition     A condition to evaluate before each iteration starts. If the condition returns false, the loop exits.
+     * @param afterLoopCode Code to run after the main actor's loop finishes
+     * @param code          The closure to invoke repeatedly
+     */
+    private void loop(final Callable<Boolean> condition, final Closure afterLoopCode, final Runnable code) {
+        if (loopCode != null || loopCondition != null) {
             throw new IllegalStateException("The loop method must be only called once");
         }
 
@@ -762,6 +843,7 @@ public abstract class SequentialProcessingActor extends Actor implements Runnabl
             ((Closure) code).setResolveStrategy(Closure.DELEGATE_FIRST);
             ((Closure) code).setDelegate(this);
         }
+        loopCondition = condition;
         loopCode = new Runnable() {
             public void run() {
                 getSenders().clear();
@@ -777,41 +859,55 @@ public abstract class SequentialProcessingActor extends Actor implements Runnabl
                 doLoopCall();
             }
         };
-        loopCode.run();
+        if (afterLoopCode != null) {
+            this.afterLoopCode = afterLoopCode;
+            this.afterLoopCode.setDelegate(this);
+            this.afterLoopCode.setResolveStrategy(Closure.DELEGATE_FIRST);
+        }
+        doLoopCall();
     }
 
-    private void doLoopCall() {
-        checkStopTerminate();
-
-        if (loopCode != null) {
-            scheduleLoop();
-        } else {
-            // case of react called directly from act ()
-            stopFlag = S_STOPPING;
-            throw STOP;
+    private static boolean verifyLoopCondition(final Callable<Boolean> condition) {
+        try {
+            if (condition == null) return true;
+            return condition.call() == Boolean.TRUE;
+        } catch (Exception e) {
+            throw new RuntimeException(ERROR_EVALUATING_LOOP_CONDITION, e);
         }
     }
 
+    private void doLoopCall() {
+        if (verifyLoopCondition(loopCondition)) {
+            checkStopTerminate();
+
+            //noinspection VariableNotUsedInsideIf
+            if (loopCode != null) {
+                scheduleLoop();  //throws a control exception
+            }
+        }
+        if (afterLoopCode != null) {
+            loopCode = null;
+            final Closure localAfterLoopCode = afterLoopCode;
+            afterLoopCode = null;
+            localAfterLoopCode.call();
+        }
+        stopFlag = S_STOPPING;
+        throw STOP;
+    }
+
+    final void runReaction(final ActorMessage message, final Closure code) {
+        runEnhancedWithReplies(message, code);
+        doLoopCall();
+    }
+
     protected final void checkStopTerminate() {
-        if (stopFlag != S_RUNNING) {
+        if (hasBeenStopped()) {
             if (stopFlag == S_TERMINATING)
                 throw TERMINATE;
 
             if (stopFlag != S_STOPPING)
-                throw new IllegalStateException("Should not reach here");
+                throw new IllegalStateException(SHOULD_NOT_REACH_HERE);
         }
-    }
-
-    void runReaction(final ActorMessage message, final Closure code) {
-        assert message != null;
-
-        if (message.getPayLoad() == TIMEOUT) throw TIMEOUT;
-        getSenders().add(message.getSender());
-        obj2Sender.put(message.getPayLoad(), message.getSender());
-
-        //noinspection deprecation
-        GroovyCategorySupport.use(Arrays.<Class>asList(ReplyCategory.class), code);
-        doLoopCall();
     }
 
     /**

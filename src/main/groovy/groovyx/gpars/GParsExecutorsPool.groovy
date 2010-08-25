@@ -16,6 +16,7 @@
 
 package groovyx.gpars
 
+import groovyx.gpars.dataflow.DataFlowVariable
 import groovyx.gpars.util.PoolUtils
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutorService
@@ -214,19 +215,20 @@ class GParsExecutorsPool {
 
     /**
      * Starts multiple closures in separate threads, collecting Futures for their return values
+     * Reuses the pool defined by the surrounding withPool() call.
      * If an exception is thrown from the closure when called on any of the collection's elements,
      * it will be re-thrown in the calling thread when it calls the Future.get() method.
      * @return Futures for the result values or exceptions of all closures
      */
     public static List<Future<Object>> executeAsync(Closure... closures) {
-        GParsExecutorsPool.withPool(closures.size()) {ExecutorService executorService ->
-            List<Future<Object>> result = closures.collect {cl ->
-                executorService.submit({
-                    cl.call()
-                } as Callable<Object>)
-            }
-            result
+        ExecutorService executorService = retrieveCurrentPool()
+        if (executorService == null) throw new IllegalStateException("No active thread pool available to execute closures asynchronously. Consider wrapping the function call with GParsExecutorsPool.withPool().")
+        List<Future<Object>> result = closures.collect {cl ->
+            executorService.submit({
+                cl.call()
+            } as Callable<Object>)
         }
+        result
     }
 
     /**
@@ -237,5 +239,42 @@ class GParsExecutorsPool {
      */
     public static List<Future<Object>> executeAsync(List<Closure> closures) {
         return executeAsync(* closures)
+    }
+
+    /**
+     * Runs the supplied closures asynchronously and in parallel, returning the first result obtained and cancelling the other (slower) calculations.
+     * Typically used to run several different calculations in parallel, all of which are supposed to give the same result,
+     * but may last different amount of time each. If the system has enough threads available, the calculations can be test-run
+     * in parallel and the fastest result is then used, while the other results are cancelled or discarded.
+     * @param alternatives All the functions to invoke in parallel
+     * @return The fastest result obtained
+     */
+    public static def speculate(List<Closure> alternatives) {
+        speculate(* alternatives)
+    }
+
+    /**
+     * Runs the supplied closures asynchronously and in parallel, returning the first result obtained and cancelling the other (slower) calculations.
+     * Typically used to run several different calculations in parallel, all of which are supposed to give the same result,
+     * but may last different amount of time each. If the system has enough threads available, the calculations can be test-run
+     * in parallel and the fastest result is then used, while the other results are cancelled or discarded.
+     * @param alternatives All the functions to invoke in parallel
+     * @return The fastest result obtained
+     */
+    public static def speculate(Closure... alternatives) {
+        def result = new DataFlowVariable()
+        def futures = new DataFlowVariable()
+        futures << GParsExecutorsPool.executeAsync(alternatives.collect {
+            original ->
+            {->
+                //noinspection GroovyEmptyCatchBlock
+                try {
+                    def localResult = original()
+                    futures.val*.cancel(true)
+                    result << localResult
+                } catch (Exception ignore) { }
+            }
+        })
+        return result.val
     }
 }

@@ -17,8 +17,9 @@
 package groovyx.gpars.actor.nonBlocking
 
 import groovyx.gpars.actor.Actors
-import groovyx.gpars.group.DefaultPGroup
 import groovyx.gpars.actor.ReactiveActor
+import groovyx.gpars.dataflow.DataFlows
+import groovyx.gpars.group.DefaultPGroup
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -34,14 +35,14 @@ public class ReactorTest extends GroovyTestCase {
         }
 
         (0..5).each {
-          processor << it
+            processor << it
         }
 
         latch.await()
         processor.stop()
         processor.join()
 
-        assertEquals ([0, 2, 4, 6, 8, 10], res)
+        assertEquals([0, 2, 4, 6, 8, 10], res)
     }
 
     public void testWait() {
@@ -49,12 +50,12 @@ public class ReactorTest extends GroovyTestCase {
             2 * it
         }
 
-        assertEquals (20, processor.sendAndWait(10))
-        assertEquals (40, processor.sendAndWait(20))
-        assertEquals (60, processor.sendAndWait(30))
+        assertEquals(20, processor.sendAndWait(10))
+        assertEquals(40, processor.sendAndWait(20))
+        assertEquals(60, processor.sendAndWait(30))
 
         processor.stop()
-        processor.join(10,TimeUnit.SECONDS)
+        processor.join(10, TimeUnit.SECONDS)
     }
 
     public void testMessageProcessing() {
@@ -91,6 +92,68 @@ public class ReactorTest extends GroovyTestCase {
     public void testGroup() {
         final DefaultPGroup group = new DefaultPGroup()
         final ReactiveActor reactor = group.reactor {}
-        assertSame group, reactor.actorGroup
+        assertSame group, reactor.parallelGroup
+    }
+
+    public void testNullMessage() {
+        def res = []
+        CountDownLatch latch = new CountDownLatch(1)
+        final def processor = Actors.reactor {
+            res << it
+            latch.countDown()
+        }
+
+        processor << null
+
+        latch.await()
+        processor.stop()
+        processor.join()
+
+        assertEquals([null], res)
+    }
+
+    public void testReplies() {
+        def reactor = Actors.reactor {
+            reply 10
+            it.reply 20
+            30
+        }
+
+        Actors.actor {
+            reactor << 1
+            def results = (1..3).collect {receive(1000, TimeUnit.MILLISECONDS)}
+            assert results == [10, 20, 30]
+            reactor.stop()
+        }
+    }
+
+    public void testSendAndWait() {
+        def reactor = Actors.reactor {
+            10
+        }
+
+        Actors.actor {
+            assert 10 == reactor.sendAndWait(1)
+            assert 10 == reactor.sendAndWait(1)
+        }
+    }
+
+    public void testSendAndContinue() {
+        def reactor = Actors.reactor {
+            2 * it
+        }
+
+        final DataFlows results = new DataFlows()
+
+        reactor.sendAndContinue(1) {results.d1 = it}
+        reactor.sendAndContinue(2) {results.d2 = it}
+        reactor.sendAndContinue(3) {results.d3 = it}
+        Actors.actor {
+            reactor.sendAndContinue(4) {results.d4 = it}
+        }
+        assert results.d1 == 2
+        assert results.d2 == 4
+        assert results.d3 == 6
+        assert results.d4 == 8
     }
 }

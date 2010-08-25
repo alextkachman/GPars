@@ -15,11 +15,9 @@
 // limitations under the License.
 package groovyx.gpars.actor.impl;
 
-import groovy.lang.Closure;
 import groovy.time.Duration;
 import groovyx.gpars.actor.Actor;
 import groovyx.gpars.actor.ActorMessage;
-import groovyx.gpars.dataflow.DataCallback;
 import groovyx.gpars.remote.RemoteConnection;
 import groovyx.gpars.remote.RemoteHost;
 import groovyx.gpars.serial.RemoteSerialized;
@@ -30,7 +28,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
 
 /**
- * Stream of abstract messages
+ * Represents a stream of messages and forms the base class for actors
  *
  * @author Alex Tkachman, Vaclav Pech, Dierk Koenig
  */
@@ -101,22 +99,6 @@ public abstract class MessageStream extends WithSerialId {
     }
 
     /**
-     * Sends a message and execute continuation when reply became available.
-     *
-     * @param message message to send
-     * @param closure closure to execute when reply became available
-     * @return Always returns message streamitself
-     * @throws InterruptedException if interrupted while waiting
-     */
-    @SuppressWarnings({"AssignmentToMethodParameter"})
-    public final <T> MessageStream sendAndContinue(final T message, Closure closure) throws InterruptedException {
-        closure = (Closure) closure.clone();
-        closure.setDelegate(this);
-        closure.setResolveStrategy(Closure.DELEGATE_FIRST);
-        return send(message, new DataCallback(closure));
-    }
-
-    /**
      * Sends a message and waits for a reply. Timeouts after the specified timeout. In case of timeout returns null.
      * Returns the reply or throws an IllegalStateException, if the target actor cannot reply.
      *
@@ -183,6 +165,8 @@ public abstract class MessageStream extends WithSerialId {
          */
         @Override
         public MessageStream send(final Object message) {
+            if (isSet)
+                throw new IllegalStateException("A reply has already been sent. The originator does not expect more than one reply.");
             final Thread thread = (Thread) this.value;
             if (message instanceof ActorMessage) {
                 this.value = ((ActorMessage) message).getPayLoad();

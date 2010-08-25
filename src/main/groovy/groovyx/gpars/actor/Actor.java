@@ -15,11 +15,17 @@
 // limitations under the License.
 package groovyx.gpars.actor;
 
+import groovy.lang.Closure;
+import groovy.lang.MetaClass;
+import groovy.lang.MetaMethod;
 import groovy.time.BaseDuration;
 import groovyx.gpars.actor.impl.MessageStream;
-import groovyx.gpars.actor.impl.ReceivingMessageStream;
+import groovyx.gpars.actor.impl.ReplyCategory;
+import groovyx.gpars.actor.impl.ReplyingMessageStream;
+import groovyx.gpars.dataflow.DataCallback;
 import groovyx.gpars.dataflow.DataFlowExpression;
 import groovyx.gpars.dataflow.DataFlowVariable;
+import groovyx.gpars.group.PGroup;
 import groovyx.gpars.remote.RemoteConnection;
 import groovyx.gpars.remote.RemoteHost;
 import groovyx.gpars.serial.DefaultRemoteHandle;
@@ -29,9 +35,17 @@ import groovyx.gpars.serial.SerialContext;
 import groovyx.gpars.serial.SerialHandle;
 import groovyx.gpars.serial.SerialMsg;
 import groovyx.gpars.serial.WithSerialId;
+import org.codehaus.groovy.runtime.GroovyCategorySupport;
+import org.codehaus.groovy.runtime.InvokerHelper;
 
 import java.lang.reflect.InvocationTargetException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
+
+import static groovyx.gpars.actor.impl.ActorException.TIMEOUT;
 
 /**
  * Actors are active objects, which borrow a thread from a thread pool.
@@ -40,7 +54,7 @@ import java.util.concurrent.TimeUnit;
  *
  * @author Vaclav Pech, Alex Tkachman
  */
-public abstract class Actor extends ReceivingMessageStream {
+public abstract class Actor extends ReplyingMessageStream {
 
     /**
      * Maps each thread to the actor it currently processes.
@@ -49,6 +63,22 @@ public abstract class Actor extends ReceivingMessageStream {
     private static final ThreadLocal<Actor> currentActorPerThread = new ThreadLocal<Actor>();
 
     private final DataFlowExpression<Object> joinLatch;
+
+    /**
+     * The parallel group to which the message stream belongs
+     */
+    protected volatile PGroup parallelGroup;
+    protected static final ActorMessage stopMessage = new ActorMessage("stopMessage", null);
+    protected static final ActorMessage terminateMessage = new ActorMessage("terminateMessage", null);
+    private static final String AFTER_START = "afterStart";
+    private static final String RESPONDS_TO = "respondsTo";
+    private static final String ON_DELIVERY_ERROR = "onDeliveryError";
+    private static final Object[] EMPTY_ARGUMENTS = new Object[0];
+
+    private volatile Closure onStop = null;
+
+    protected volatile Thread currentThread;
+    protected static final String ACTOR_HAS_ALREADY_BEEN_STARTED = "Actor has already been started.";
 
     protected Actor() {
         this(new DataFlowVariable());
@@ -60,7 +90,51 @@ public abstract class Actor extends ReceivingMessageStream {
      * @param joinLatch The instance of DataFlowExpression to use for join operation
      */
     protected Actor(final DataFlowExpression<Object> joinLatch) {
+        this(joinLatch, Actors.defaultActorPGroup);
+    }
+
+    protected Actor(final DataFlowExpression<Object> joinLatch, final PGroup parallelGroup) {
         this.joinLatch = joinLatch;
+        this.parallelGroup = parallelGroup;
+    }
+
+    /**
+     * Retrieves the group to which the actor belongs
+     *
+     * @return The group
+     */
+    public final PGroup getParallelGroup() {
+        return parallelGroup;
+    }
+
+    /**
+     * Sets the parallel group.
+     * It can only be invoked before the actor is started.
+     *
+     * @param group new group
+     */
+    public void setParallelGroup(final PGroup group) {
+        if (group == null) {
+            throw new IllegalArgumentException("Cannot set actor's group to null.");
+        }
+
+        parallelGroup = group;
+    }
+
+    /**
+     * Sends a message and execute continuation when reply became available.
+     *
+     * @param message message to send
+     * @param closure closure to execute when reply became available
+     * @return The message that came in reply to the original send.
+     * @throws InterruptedException if interrupted while waiting
+     */
+    @SuppressWarnings({"AssignmentToMethodParameter"})
+    public final <T> MessageStream sendAndContinue(final T message, Closure closure) throws InterruptedException {
+        closure = (Closure) closure.clone();
+        closure.setDelegate(this);
+        closure.setResolveStrategy(Closure.DELEGATE_FIRST);
+        return send(message, new DataCallback(closure, parallelGroup));
     }
 
     /**
@@ -94,13 +168,6 @@ public abstract class Actor extends ReceivingMessageStream {
      * @return current status of the Actor.
      */
     public abstract boolean isActive();
-
-    /**
-     * Checks whether the current thread is the actor's worker thread.
-     *
-     * @return whether the current thread is the actor's worker thread
-     */
-    public abstract boolean isActorThread();
 
     /**
      * Joins the actor. Waits for its termination.
@@ -180,9 +247,140 @@ public abstract class Actor extends ReceivingMessageStream {
         return Actor.currentActorPerThread.get();
     }
 
+    protected final ActorMessage createActorMessage(final Object message) {
+        if (hasBeenStopped()) {
+            //noinspection ObjectEquality
+            if (message != terminateMessage && message != stopMessage)
+                throw new IllegalStateException("The actor cannot accept messages at this point.");
+        }
+
+        final ActorMessage actorMessage;
+        if (message instanceof ActorMessage) {
+            actorMessage = (ActorMessage) message;
+        } else {
+            actorMessage = ActorMessage.build(message);
+        }
+        return actorMessage;
+    }
+
+    protected abstract boolean hasBeenStopped();
+
+    protected final void runEnhancedWithReplies(final ActorMessage message, final Closure code) {
+        assert message != null;
+
+        if (message.getPayLoad() == TIMEOUT) throw TIMEOUT;
+        getSenders().add(message.getSender());
+        obj2Sender.put(message.getPayLoad(), message.getSender());
+
+        //noinspection deprecation
+        GroovyCategorySupport.use(Arrays.<Class>asList(ReplyCategory.class), code);
+    }
+
     @Override
     protected RemoteHandle createRemoteHandle(final SerialHandle handle, final SerialContext host) {
         return new MyRemoteHandle(handle, host, joinLatch);
+    }
+
+    protected void handleStart() {
+        final Object list = InvokerHelper.invokeMethod(this, RESPONDS_TO, new Object[]{AFTER_START});
+        if (list != null && !((Collection<Object>) list).isEmpty()) {
+            InvokerHelper.invokeMethod(this, AFTER_START, EMPTY_ARGUMENTS);
+        }
+    }
+
+    protected void handleTermination() {
+        final List<?> queue = sweepQueue();
+        if (onStop != null)
+            onStop.call(queue);
+
+        callDynamic("afterStop", new Object[]{queue});
+    }
+
+    /**
+     * Set on stop handler for this actor
+     *
+     * @param onStop The code to invoke when stopping
+     */
+    public final void onStop(final Closure onStop) {
+        if (onStop != null) {
+            this.onStop = (Closure) onStop.clone();
+            this.onStop.setDelegate(this);
+            this.onStop.setResolveStrategy(Closure.DELEGATE_FIRST);
+        }
+    }
+
+
+    protected void handleException(final Throwable exception) {
+        if (!callDynamic("onException", new Object[]{exception})) {
+            System.err.println("An exception occurred in the Actor thread " + Thread.currentThread().getName());
+            exception.printStackTrace(System.err);
+        }
+    }
+
+    protected void handleInterrupt(final InterruptedException exception) {
+        Thread.interrupted();
+        if (!callDynamic("onInterrupt", new Object[]{exception})) {
+            if (!hasBeenStopped()) {
+                System.err.println("The actor processing thread has been interrupted " + Thread.currentThread().getName());
+                exception.printStackTrace(System.err);
+            }
+        }
+    }
+
+    protected void handleTimeout() {
+        callDynamic("onTimeout", EMPTY_ARGUMENTS);
+    }
+
+    private boolean callDynamic(final String method, final Object[] args) {
+        final MetaClass metaClass = InvokerHelper.getMetaClass(this);
+        final List<MetaMethod> list = metaClass.respondsTo(this, method);
+        if (list != null && !list.isEmpty()) {
+            InvokerHelper.invokeMethod(this, method, args);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Removes the head of the message queue
+     *
+     * @return The head message, or null, if the message queue is empty
+     */
+    protected abstract ActorMessage sweepNextMessage();
+
+    /**
+     * Clears the message queue returning all the messages it held.
+     *
+     * @return The messages stored in the queue
+     */
+    final List<ActorMessage> sweepQueue() {
+        final List<ActorMessage> messages = new ArrayList<ActorMessage>();
+
+        ActorMessage message = sweepNextMessage();
+        while (message != null && message != stopMessage) {
+            final Object payloadList = InvokerHelper.invokeMethod(message.getPayLoad(), RESPONDS_TO, new Object[]{ON_DELIVERY_ERROR});
+            if (payloadList != null && !((Collection<Object>) payloadList).isEmpty()) {
+                InvokerHelper.invokeMethod(message.getPayLoad(), ON_DELIVERY_ERROR, EMPTY_ARGUMENTS);
+            } else {
+                final Object senderList = InvokerHelper.invokeMethod(message.getSender(), RESPONDS_TO, new Object[]{ON_DELIVERY_ERROR});
+                if (senderList != null && !((Collection<Object>) senderList).isEmpty()) {
+                    InvokerHelper.invokeMethod(message.getSender(), ON_DELIVERY_ERROR, EMPTY_ARGUMENTS);
+                }
+            }
+
+            messages.add(message);
+            message = sweepNextMessage();
+        }
+        return messages;
+    }
+
+    /**
+     * Checks whether the current thread is the actor's current thread.
+     *
+     * @return True if invoked from within an actor thread
+     */
+    public final boolean isActorThread() {
+        return Thread.currentThread() == currentThread;
     }
 
     public static class MyRemoteHandle extends DefaultRemoteHandle {
@@ -232,8 +430,13 @@ public abstract class Actor extends ReceivingMessageStream {
         }
 
         @Override
-        public boolean isActorThread() {
-            return false;
+        protected boolean hasBeenStopped() {
+            return false;  //todo implement
+        }
+
+        @Override
+        protected ActorMessage sweepNextMessage() {
+            throw new UnsupportedOperationException();
         }
 
         @SuppressWarnings({"AssignmentToMethodParameter"})
@@ -244,16 +447,6 @@ public abstract class Actor extends ReceivingMessageStream {
             }
             remoteHost.write(new SendTo(this, (ActorMessage) message));
             return this;
-        }
-
-        @Override
-        protected Object receiveImpl() throws InterruptedException {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        protected Object receiveImpl(final long timeout, final TimeUnit units) throws InterruptedException {
-            throw new UnsupportedOperationException();
         }
 
         public static class StopActorMsg extends SerialMsg {

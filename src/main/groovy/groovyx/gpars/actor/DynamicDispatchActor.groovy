@@ -36,7 +36,7 @@ import org.codehaus.groovy.runtime.NullObject
  * Date: Jun 26, 2009
  */
 
-@SuppressWarnings("GroovyAssignmentToMethodParameter") public class DynamicDispatchActor extends AbstractPooledActor {
+public class DynamicDispatchActor extends AbstractLoopingActor {
 
     /**
      * Creates a new instance without any when handlers registered
@@ -56,19 +56,12 @@ import org.codehaus.groovy.runtime.NullObject
             cloned.delegate = this
             cloned.call()
         }
-    }
 
-    /**
-     * Loops reading messages using the react() method and dispatches to the corresponding onMessage() method.
-     */
-    final void act() {
-        loop {
-            react {msg ->
-                if (msg == null)
-                    msg = NullObject.nullObject
-                onMessage msg
-            }
-        }
+        initialize({msg ->
+            if (msg == null)
+                msg = NullObject.nullObject
+            onMessage msg
+        })
     }
 
     void when(Closure closure) {
