@@ -174,11 +174,38 @@ public abstract class PGroup {
      */
     public DataFlowVariable task(final Closure code) {
         final DataFlowVariable result = new DataFlowVariable()
-        def cloned = code.clone()
+        Closure cloned = code.clone()
+        cloned.setResolveStrategy Closure.DELEGATE_FIRST
+        //todo rename to task
+        //todo test subtasks created inside eachParallel()
+        //todo test calling subtask in an async operation
+        //todo subtask on the root level
+        final Object subtaskHandler = new Object() {
+            def results
+
+            @SuppressWarnings("GroovySynchronizedMethod")
+            def synchronized subtask(final Closure subtaskCode) {
+                if (results == null) {results = []}
+                results << task(subtaskCode)
+            }
+
+            @SuppressWarnings("GroovySynchronizedMethod")
+            def synchronized awaitSubtasks(resultDFV, resultValue) {
+                if (results) {
+                    results.remove(0) >> {awaitSubtasks(resultDFV, resultValue)}
+                }
+                else {
+                    resultDFV.bind resultValue
+                }
+            }
+        }
+        cloned.setDelegate subtaskHandler
         threadPool.execute {->
             DataFlowExpression.activeParallelGroup.set this
             try {
-                result.bind cloned()
+                final def taskResult = cloned()
+                subtaskHandler.awaitSubtasks(result, taskResult)
+
             } finally {
                 DataFlowExpression.activeParallelGroup.remove()
             }
