@@ -176,7 +176,7 @@ public abstract class PGroup {
         final DataFlowVariable result = new DataFlowVariable()
         Closure cloned = code.clone()
         cloned.setResolveStrategy Closure.DELEGATE_FIRST
-        //todo rename to task
+        //todo rename to task or activity/subactivity
         //todo test subtasks created inside eachParallel()
         //todo test calling subtask in an async operation
         //todo subtask on the root level
