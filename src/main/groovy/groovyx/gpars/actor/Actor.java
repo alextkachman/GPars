@@ -287,7 +287,10 @@ public abstract class Actor extends ReplyingMessageStream {
         assert message != null;
         final MessageStream sender = message.getSender();
         if (sender != null) getSenders().add(sender);
-        code.call(arguments);
+//        code.call(arguments);
+        obj2Sender.put(message.getPayLoad(), message.getSender());
+        GroovyCategorySupport.use(Arrays.<Class>asList(ReplyCategory.class), new CurriedActorClosure(code, message.getPayLoad()));
+
     }
 
     @SuppressWarnings("rawtypes")
