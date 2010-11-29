@@ -16,43 +16,99 @@
 
 package groovyx.gpars.samples.memoize
 
-def fact
-fact = {int n, BigInteger accumulator ->
-    println 'AAAAAAAAAAAA ' + n + ":" + accumulator
-    n > 1 ? fact.curry(n - 1, n * accumulator) : accumulator
-}
-def factorial = {int n -> fact(n, 1)}
+final class TrampolineClosure extends Closure {
+    final Closure original
 
-def funB
-def funA = {int num -> num==0 ? 0 : funB.curry(num-1)}
-funB = {int num -> num==0 ? 0 : funA.curry(num-1)}
+    def TrampolineClosure(final original) {
+        super(original.owner, original.delegate);
+        this.original = original;
+    }
+
+    def int getMaximumNumberOfParameters() {
+        return original.maximumNumberOfParameters
+    }
+
+    def Class[] getParameterTypes() {
+        return original.parameterTypes
+    }
+
+    public def call() {
+        return loop(getOriginal().call())
+    }
+
+    public def call(Object arguments) {
+        return loop(getOriginal().call(arguments))
+    }
+
+    public def call(Object... args) {
+        return loop(getOriginal().call(* args))
+    }
+
+    private def loop(lastResult) {
+        def result = lastResult
+
+        for (;;) {
+            if (result instanceof TrampolineClosure) {
+                def currentFunction = result.getOriginal();
+                result = currentFunction.call();
+            } else return result
+        }
+    }
+
+    def trampoline(Object... args) {
+        return new TrampolineClosure(getOriginal().curry(* args))
+    }
+
+    def trampoline() {
+        return this
+    }
+}
 
 class Trampoline {
     def static trampoline(Closure func, Object... args) {
-        trampoline func.curry(*args)
+        if (func instanceof TrampolineClosure) {
+            return new TrampolineClosure(func.getOriginal().curry(* args))
+        } else {
+            return new TrampolineClosure(func.curry(* args))
+        }
     }
 
     def static trampoline(Closure func) {
-        def currentFunction = func
-        for(;;) {
-            final def result = currentFunction.call();
-            if (result instanceof Closure) {
-                currentFunction = result;
-            } else return result
+        if (func instanceof TrampolineClosure) {
+            return func
+        } else {
+            return new TrampolineClosure(func)
         }
-        throw new IllegalStateException("The trampoline did not find a result")
     }
 }
 
-//println(Trampoline.trampoline(fact.curry(50, 1)))
-//println(Trampoline.trampoline(factorial.curry(50)))
-//println(Trampoline.trampoline(funA, 10))
-
 use(Trampoline) {
-    println factorial.trampoline(1000)
-    println(funA.trampoline(1000))
+    def fact
+    fact = {int n, BigInteger accumulator ->
+//        println 'AAAAAAAAAAAA ' + n + ":" + accumulator
+        n > 1 ? fact.trampoline(n - 1, n * accumulator) : accumulator
+    }.trampoline()
+    def factorial = {int n -> fact(n, 1)}
+
+    def funB
+    def funA = {int num -> num == 0 ? 0 : funB.trampoline(num - 1)}
+    funB = {int num -> num == 0 ? 0 : funA.trampoline(num - 1)}
+
+    println factorial(1)
+    println factorial(2)
+    println factorial(3)
+    println factorial(6)
+    println factorial(10)
+    println factorial(1000)
+    println(funA.trampoline()(1000))
+    println(funA.trampoline(1000)())
+
+    def funD
+    def funC = {int num -> num == 0 ? 0 : funD.trampoline(num - 1)}.trampoline()
+    funD = {int num -> num == 0 ? 0 : funC.trampoline(num - 1)}.trampoline()
+
+    println(funC(1000))
+    println(funD(1000))
 }
 
 //println funA(1000)
-//todo test spreading arguments
-//todo enable funA.trampoline(10)
