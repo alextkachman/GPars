@@ -24,7 +24,7 @@ import static groovyx.gpars.GParsPool.withPool
  * @author Dierk König
  */
 class Account {
-    final int balance = 0
+    int balance = 0
 
     synchronized void credit(int add) {
         this.@balance += add
